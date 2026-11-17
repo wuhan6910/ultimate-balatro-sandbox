@@ -1,0 +1,15 @@
+{
+    "id": "UltimateSandbox",
+    "name": "Ultimate Sandbox",
+    "display_name": "Ultimate Sandbox",
+    "author": [
+        "Tariq Almheiri",
+        "wuhan6910"
+    ],
+    "description": "A native-style creative toolbox for Balatro. Add any Joker, consumable, Voucher, or custom playing card to a live run; delete any number of deck cards; and edit poker-hand levels, hands, discards, hand-size limit, and money.",
+    "prefix": "usbx",
+    "main_file": "main.lua",
+    "version": "1.0.0",
+    "priority": 0,
+    "badge_colour": "3c8fd0"
+}
