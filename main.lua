@@ -1512,11 +1512,13 @@ local TAG_COLS, TAG_ROWS = 8, 3
 local function tag_list()
   local list = {}
   if not (G and G.P_TAGS) then return list end
-  for _, tag in pairs(G.P_TAGS) do
-    if type(tag) == 'table' and tag.key and tag.name then list[#list + 1] = tag end
+  for key, proto in pairs(G.P_TAGS) do
+    if type(proto) == 'table' and proto.name then
+      list[#list + 1] = { key = key, proto = proto }
+    end
   end
   table.sort(list, function(a, b)
-    local ao, bo = tonumber(a.order) or 999, tonumber(b.order) or 999
+    local ao, bo = tonumber(a.proto.order) or 999, tonumber(b.proto.order) or 999
     if ao ~= bo then return ao < bo end
     return tostring(a.key) < tostring(b.key)
   end)
@@ -1551,7 +1553,7 @@ local function tag_cell(tag)
   end)
   if not ok then
     return { n = G.UIT.C, config = { align = 'cm', padding = 0.08 }, nodes = {
-      { n = G.UIT.T, config = { text = tostring(tag.name), scale = 0.24,
+      { n = G.UIT.T, config = { text = tostring(tag.proto.name), scale = 0.24,
         colour = G.C.UI.TEXT_LIGHT, shadow = true } },
     } }
   end
@@ -1607,6 +1609,7 @@ local function tag_definition()
 end
 
 open_tag_browser = function()
+  log('tag grid: ' .. #tag_list() .. ' tags')
   local ok, err = pcall(function()
     G.SETTINGS.paused = true
     G.FUNCS.overlay_menu({ definition = tag_definition() })
