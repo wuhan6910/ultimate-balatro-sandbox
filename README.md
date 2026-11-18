@@ -47,7 +47,7 @@ Typical Windows Mods folder:
 You can also clone the repository:
 
 ```bash
-git clone https://github.com/wuhan6910/ultimate-sandbox.git
+git clone https://github.com/wuhan6910/ultimate-balatro-sandbox.git
 ```
 
 Use either Ultimate Sandbox or the Chinese edition, not both at the same time.
