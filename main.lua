@@ -66,6 +66,13 @@ local NEGATIVE_EDITION_INDEX = 5
 
 local function log(msg) print('[Ultimate Sandbox] ' .. tostring(msg)) end
 
+local function sandbox_toast(text, colour)
+  pcall(function()
+    attention_text({ text = text, scale = 0.75, hold = 0.9, align = 'cm',
+      colour = colour or G.C.WHITE, shadow = true })
+  end)
+end
+
 local open_delete_browser
 local toggle_delete_selection
 local open_stats_browser
@@ -1768,6 +1775,7 @@ local function duplicate_selected_cards()
   end
   if #targets == 0 then
     log('nothing selected')
+    sandbox_toast('Click a card to select it first', G.C.RED)
     pcall(play_sound, 'cancel')
     return
   end
