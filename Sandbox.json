@@ -6,10 +6,10 @@
     "Tariq Almheiri",
     "wuhan6910"
   ],
-  "description": "A native-style creative toolbox for Balatro. Add any Joker, consumable, Voucher, or custom playing card to a live run; delete deck cards or Jokers; and edit poker-hand levels (including all hands at once), hands, discards, hand-size limit, and money.",
+  "description": "A native-style creative toolbox for Balatro. Add any Joker, consumable, Voucher, tag, or custom playing card to a live run; delete deck cards or Jokers; duplicate owned cards; and edit poker-hand levels, hands, discards, hand-size limit, and money.",
   "prefix": "usbx",
   "main_file": "main.lua",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "priority": 0,
   "badge_colour": "3c8fd0"
 }

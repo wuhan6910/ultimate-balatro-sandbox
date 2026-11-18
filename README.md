@@ -12,8 +12,8 @@ part of the game.
 
 ## Features
 
-- Four compact buttons appear on the right side of a run: `Cards`, `Stats`, `Deck`, and
-  `Browse`.
+- Six compact buttons appear on the right side of a run: `Cards`, `Stats`, `Deck`,
+  `Browse`, `Tags`, and `Copy`.
 - Browse and spawn every Joker, Tarot, Planet, Spectral card, and Voucher in the game.
 - Choose any base-game edition for Jokers and stickers for Jokers only. Tarot, Planet,
   and Spectral cards support only None/Negative editions, matching the base game.
@@ -21,6 +21,8 @@ part of the game.
   to your hand or draw pile.
 - Show the entire deck on one screen, select multiple cards, and delete them at once.
 - Delete Jokers from play in the same editor, even when they carry an Eternal sticker.
+- Add any tag from a native grid of tag sprites, with the game's hover description.
+- Duplicate any owned Joker or consumable, keeping edition, stickers and current values.
 - Edit poker-hand levels, current and future hand/discard counts, hand-size limit, and
   money.
 
@@ -35,7 +37,7 @@ part of the game.
 1. Install Lovely and Steamodded as described by their own documentation.
 2. Download the latest Ultimate Sandbox release.
 3. Extract the `ultimate-sandbox` folder into your Balatro `Mods` folder.
-4. Launch the game and start a run. The four Ultimate Sandbox buttons will appear on the
+4. Launch the game and start a run. The six Ultimate Sandbox buttons will appear on the
    right side of the screen.
 
 Typical Windows Mods folder:
@@ -81,6 +83,16 @@ sell restrictions, so Eternal, Perishable, and Rental stickers cannot block it.
 
 Choose a card type, edition, and sticker, then click a card to add it to the run.
 Vouchers are redeemed permanently and owned Vouchers are dimmed.
+
+### Tags
+
+Every tag is shown as its native sprite. Hover one to read its effect, then click to add
+it to the run.
+
+### Copy
+
+Lists your Jokers or consumables. Select any number and click `Copy Selected`; the copies
+keep edition, stickers and current values. Slot limits expand automatically when needed.
 
 ## Compatibility
 

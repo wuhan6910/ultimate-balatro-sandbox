@@ -1,11 +1,13 @@
 --- Sandbox — a creative-mode toolbox for Balatro.
---- Four native-styled buttons appear on the right during a run:
+--- Six native-styled buttons appear on the right during a run:
 ---   [Cards] adds one playing card with a chosen rank, suit, enhancement,
 ---          edition and seal, into the hand or the draw pile.
 ---   [Stats] edits poker-hand levels, hands/discards, hand-size limit, and money.
 ---   [Deck]  opens the whole-deck editor for selecting and deleting cards.
 ---   [Browse] opens the full-screen browser: every Joker/Tarot/Planet/
 ---          Spectral/Voucher, paginated; CLICK a card to add it.
+---   [Tags]  opens the tag grid; CLICK a tag to add it to the run.
+---   [Copy]  duplicates owned Jokers or consumables, keeping editions/stickers.
 ---
 --- Uses only the game's own UI primitives (UIBox, CardArea, option cycles,
 --- overlay menus) so everything looks and feels native.
@@ -28,6 +30,13 @@ local SBX = {
   delete_selected_count = 0,
   delete_scale = 0.4,
   delete_mode = 'deck',     -- 'deck' or 'jokers'
+  tag_page = 1,             -- tag browser page
+  dup_areas = {},           -- duplicate grid CardAreas
+  dup_cards = {},           -- card references shown in the duplicate grid
+  dup_selected = {},        -- original card refs selected for duplication
+  dup_selected_count = 0,
+  dup_scale = 0.55,
+  dup_mode = 'jokers',      -- 'jokers' or 'consumables'
 }
 
 SBX.SETS = { 'Joker', 'Tarot', 'Planet', 'Spectral', 'Voucher' }
@@ -60,6 +69,9 @@ local function log(msg) print('[Ultimate Sandbox] ' .. tostring(msg)) end
 local open_delete_browser
 local toggle_delete_selection
 local open_stats_browser
+local open_tag_browser
+local open_dup_browser
+local toggle_dup_selection
 
 local function card_log_name(card)
   local base = card and card.base
@@ -198,6 +210,10 @@ local orig_card_click = Card.click
 function Card:click()
   if self.area and self.area.config and self.area.config.sandbox_delete then
     toggle_delete_selection(self)
+    return
+  end
+  if self.area and self.area.config and self.area.config.sandbox_dup then
+    toggle_dup_selection(self)
     return
   end
   if self.area and self.area.config and self.area.config.sandbox_grid then
@@ -509,6 +525,14 @@ local function buttons_definition()
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       UIBox_button({ button = 'sbx_open_browser', label = { 'Browse' }, minw = 0.92, maxw = 0.92,
         minh = 0.6, scale = 0.25, colour = G.C.BOOSTER }),
+    } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+      UIBox_button({ button = 'sbx_open_tags', label = { 'Tags' }, minw = 0.92, maxw = 0.92,
+        minh = 0.6, scale = 0.25, colour = G.C.ORANGE }),
+    } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+      UIBox_button({ button = 'sbx_open_dup', label = { 'Copy' }, minw = 0.92, maxw = 0.92,
+        minh = 0.6, scale = 0.25, colour = G.C.GREEN }),
     } },
   } }
 end
@@ -1470,4 +1494,350 @@ G.FUNCS.sbx_delete_mode_jokers = function()
   if SBX.delete_mode == 'jokers' then return end
   SBX.delete_mode = 'jokers'
   open_delete_browser()
+end
+
+-- ---------------------------------------------------------------- tags
+-- Native tag sprites in a grid. Hover shows the game's own tag tooltip;
+-- clicking adds that tag to the run.
+
+local TAG_COLS, TAG_ROWS = 8, 3
+
+local function tag_list()
+  local list = {}
+  if not (G and G.P_TAGS) then return list end
+  for _, tag in pairs(G.P_TAGS) do
+    if type(tag) == 'table' and tag.key and tag.name then list[#list + 1] = tag end
+  end
+  table.sort(list, function(a, b)
+    local ao, bo = tonumber(a.order) or 999, tonumber(b.order) or 999
+    if ao ~= bo then return ao < bo end
+    return tostring(a.key) < tostring(b.key)
+  end)
+  return list
+end
+
+local function add_run_tag(key)
+  if not (G and G.GAME and G.GAME.tags) then return false, 'not in a run' end
+  if type(Tag) ~= 'function' or type(add_tag) ~= 'function' then
+    return false, 'tags are not supported by this game version'
+  end
+  local ok, err = pcall(function() add_tag(Tag(key)) end)
+  if ok then
+    log('added tag ' .. tostring(key))
+    pcall(play_sound, 'holo1', 1.1, 0.5)
+  else
+    log('tag error for ' .. tostring(key) .. ': ' .. tostring(err))
+    pcall(play_sound, 'cancel')
+  end
+  return ok, err
+end
+
+local function tag_cell(tag)
+  local ok, cell = pcall(function()
+    local temp = Tag(tag.key, true)
+    local tab, sprite = temp:generate_UI(0.8)
+    sprite.click = function(self)
+      add_run_tag(tag.key)
+      pcall(function() self:juice_up(0.2, 0.2) end)
+    end
+    return tab
+  end)
+  if not ok then
+    return { n = G.UIT.C, config = { align = 'cm', padding = 0.08 }, nodes = {
+      { n = G.UIT.T, config = { text = tostring(tag.name), scale = 0.24,
+        colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+    } }
+  end
+  return { n = G.UIT.C, config = { align = 'cm', padding = 0.08 }, nodes = { cell } }
+end
+
+local function tag_definition()
+  local list = tag_list()
+  local per_page = TAG_COLS * TAG_ROWS
+  local pages = math.max(1, math.ceil(#list / per_page))
+  SBX.tag_page = math.min(math.max(1, tonumber(SBX.tag_page) or 1), pages)
+  local first = (SBX.tag_page - 1) * per_page
+
+  local rows = {}
+  for r = 1, TAG_ROWS do
+    local nodes = {}
+    for c = 1, TAG_COLS do
+      local tag = list[first + (r - 1) * TAG_COLS + c]
+      if tag then nodes[#nodes + 1] = tag_cell(tag) end
+    end
+    if #nodes > 0 then
+      rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.04 }, nodes = nodes }
+    end
+  end
+
+  local pager = {}
+  if pages > 1 then
+    pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_prev', label = { 'Prev' },
+      minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BLUE })
+  end
+  pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_back', label = { 'Back' },
+    minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BOOSTER })
+  if pages > 1 then
+    pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_next', label = { 'Next' },
+      minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BLUE })
+  end
+
+  local pending = (G.GAME and G.GAME.tags and #G.GAME.tags) or 0
+  local contents = {
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      { n = G.UIT.T, config = { text = 'Tags', scale = 0.46, colour = G.C.ORANGE, shadow = true } },
+    } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      { n = G.UIT.T, config = { text = 'Click to add; hover for its effect. Pending tags: ' .. pending,
+        scale = 0.28, colour = G.C.UI.TEXT_LIGHT } },
+    } },
+    { n = G.UIT.R, config = { align = 'tm', r = 0.1, colour = G.C.BLACK, emboss = 0.05,
+      padding = 0.08, nodes = rows } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = pager },
+  }
+
+  return create_UIBox_generic_options({ back_func = 'exit_overlay_menu', padding = 0.1, contents = contents })
+end
+
+open_tag_browser = function()
+  local ok, err = pcall(function()
+    G.SETTINGS.paused = true
+    G.FUNCS.overlay_menu({ definition = tag_definition() })
+  end)
+  if not ok then log('tag overlay error: ' .. tostring(err)) end
+end
+
+-- ---------------------------------------------------------------- duplication
+-- Copy owned Jokers or consumables, keeping edition, stickers and current values.
+
+local DUP_COLS = 5
+local DUP_BASE_SCALE = 0.55
+
+local function dup_card_list()
+  if SBX.dup_mode == 'consumables' then
+    local list = {}
+    if not (G and G.consumeables and G.consumeables.cards) then return list end
+    for _, card in ipairs(G.consumeables.cards) do
+      if card and not card.removed then list[#list + 1] = card end
+    end
+    return list
+  end
+  return joker_card_list()
+end
+
+local function fill_dup_areas()
+  local areas = SBX.dup_areas or {}
+  local cards = SBX.dup_cards or {}
+  local scale = SBX.dup_scale or DUP_BASE_SCALE
+  for j = 1, #areas do clear_area(areas[j]) end
+  for j = 1, #areas do
+    for i = 1, DUP_COLS do
+      local original = cards[i + (j - 1) * DUP_COLS]
+      if original then
+        local ok, err = pcall(function()
+          local display = copy_card(original, nil, scale)
+          display.T.x = areas[j].T.x + areas[j].T.w / 2
+          display.T.y = areas[j].T.y
+          display:hard_set_T()
+          display.states.drag.can = false
+          display.sandbox_dup_target = original
+          areas[j]:emplace(display)
+        end)
+        if not ok then log('dup preview error: ' .. tostring(err)) end
+      end
+    end
+  end
+end
+
+toggle_dup_selection = function(display)
+  local target = display and display.sandbox_dup_target
+  if not target then return end
+  local area = display.area
+
+  if SBX.dup_selected[target] then
+    SBX.dup_selected[target] = nil
+    SBX.dup_selected_count = math.max(0, SBX.dup_selected_count - 1)
+    if area then pcall(function() area:remove_from_highlighted(display, true) end) end
+  else
+    SBX.dup_selected[target] = true
+    SBX.dup_selected_count = SBX.dup_selected_count + 1
+    if area then pcall(function() area:add_to_highlighted(display) end) end
+  end
+  pcall(play_sound, 'cardSlide1')
+end
+
+local function clear_dup_selection()
+  for _, area in ipairs(SBX.dup_areas or {}) do
+    pcall(function() area:unhighlight_all() end)
+  end
+  SBX.dup_selected = {}
+  SBX.dup_selected_count = 0
+end
+
+local function dup_definition()
+  local consumables = SBX.dup_mode == 'consumables'
+  local cards = dup_card_list()
+  SBX.dup_cards = cards
+
+  local rows = math.max(1, math.ceil(#cards / DUP_COLS))
+  local scale = rows > 1 and math.min(DUP_BASE_SCALE, 1.35 / rows) or DUP_BASE_SCALE
+  if scale < 0.3 then scale = 0.3 end
+  SBX.dup_scale = scale
+
+  SBX.dup_areas = {}
+  local grid = {}
+  for j = 1, rows do
+    SBX.dup_areas[j] = CardArea(
+      G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+      math.max(1, math.min(DUP_COLS, #cards - (j - 1) * DUP_COLS)) * G.CARD_W * scale,
+      G.CARD_H * scale,
+      { card_limit = DUP_COLS, type = 'title', highlight_limit = 999,
+        collection = true, sandbox_dup = true })
+    table.insert(grid,
+      { n = G.UIT.R, config = { align = 'cm', padding = 0.04, no_fill = true }, nodes = {
+        { n = G.UIT.O, config = { object = SBX.dup_areas[j] } },
+      } })
+  end
+
+  local selection_count = DynaText({
+    string = {{ prefix = 'Selected ', ref_table = SBX, ref_value = 'dup_selected_count', suffix = '' }},
+    colours = { G.C.WHITE }, shadow = true, scale = 0.45, pop_in = 0, silent = true,
+  })
+
+  local body_node
+  if #cards > 0 then
+    body_node = { n = G.UIT.R, config = { align = 'cm', r = 0.1,
+      colour = G.C.BLACK, emboss = 0.05, padding = 0.05 }, nodes = grid }
+  else
+    body_node = { n = G.UIT.R, config = { align = 'cm', padding = 0.05 }, nodes = {
+      { n = G.UIT.T, config = { text = consumables and 'No consumables' or 'No Jokers in play',
+        scale = 0.32, colour = G.C.UI.TEXT_LIGHT } },
+    } }
+  end
+
+  local contents = {
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      UIBox_button({ button = 'sbx_dup_mode_jokers', label = { 'Jokers' },
+        minw = 1.3, maxw = 1.5, minh = 0.48, scale = 0.33,
+        colour = (not consumables) and G.C.RED or G.C.BLUE }),
+      UIBox_button({ button = 'sbx_dup_mode_consumables', label = { 'Consumables' },
+        minw = 1.6, maxw = 1.8, minh = 0.48, scale = 0.33,
+        colour = consumables and G.C.RED or G.C.BLUE }),
+    } },
+    { n = G.UIT.R, config = { align = 'cm' }, nodes = {
+      { n = G.UIT.T, config = { text = (consumables and 'Consumables in slots: ' or 'Jokers in play: ')
+          .. #cards .. '. Click a card to toggle selection.', scale = 0.30, colour = G.C.UI.TEXT_LIGHT } },
+    } },
+    body_node,
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+      { n = G.UIT.O, config = { object = selection_count } },
+      UIBox_button({ button = 'sbx_dup_commit', label = { 'Copy Selected' },
+        minw = 2.1, maxw = 2.4, minh = 0.5, scale = 0.31, colour = G.C.GREEN }),
+      UIBox_button({ button = 'sbx_dup_clear', label = { 'Clear Selection' },
+        minw = 2.0, maxw = 2.3, minh = 0.5, scale = 0.29, colour = G.C.BLUE }),
+    } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      { n = G.UIT.T, config = { text = 'Copies keep edition, stickers and current values; slots expand automatically when needed.',
+        scale = 0.25, colour = G.C.UI.TEXT_LIGHT } },
+    } },
+  }
+
+  return create_UIBox_generic_options({ back_func = 'exit_overlay_menu', padding = 0.1, contents = contents })
+end
+
+open_dup_browser = function()
+  clear_dup_selection()
+  local ok, err = pcall(function()
+    G.SETTINGS.paused = true
+    G.FUNCS.overlay_menu({ definition = dup_definition() })
+    fill_dup_areas()
+  end)
+  if not ok then log('dup overlay error: ' .. tostring(err)) end
+end
+
+local function duplicate_selected_cards()
+  if G.STATES and G.STATE == G.STATES.HAND_PLAYED then
+    log('copy error: cards cannot be copied while a hand is scoring')
+    pcall(play_sound, 'cancel')
+    return
+  end
+
+  local targets = {}
+  for _, card in ipairs(dup_card_list()) do
+    if SBX.dup_selected[card] then targets[#targets + 1] = card end
+  end
+  if #targets == 0 then
+    log('nothing selected')
+    pcall(play_sound, 'cancel')
+    return
+  end
+
+  local consumables = SBX.dup_mode == 'consumables'
+  local area = consumables and G.consumeables or G.jokers
+  if not area then
+    log('copy error: target slot area is missing')
+    pcall(play_sound, 'cancel')
+    return
+  end
+
+  if area.config then
+    local limit = tonumber(area.config.card_limit) or #area.cards
+    local need = #area.cards + #targets
+    if need > limit then
+      area.config.card_limit = need
+      log('raised ' .. (consumables and 'consumable' or 'joker') .. ' slots to ' .. need)
+    end
+  end
+
+  local made, first_error = 0, nil
+  for _, card in ipairs(targets) do
+    local ok, err = pcall(function()
+      local copy = copy_card(card, nil, 1)
+      copy:add_to_deck()
+      area:emplace(copy)
+      if copy.juice_up then copy:juice_up(0.3, 0.3) end
+    end)
+    if ok then made = made + 1 else first_error = first_error or err end
+  end
+
+  if first_error then
+    log('copied ' .. made .. ' ' .. (consumables and 'consumables' or 'jokers')
+      .. '; error: ' .. tostring(first_error))
+  else
+    log('copied ' .. made .. ' ' .. (consumables and 'consumables' or 'jokers'))
+  end
+  pcall(play_sound, made > 0 and 'cardSlide2' or 'cancel')
+
+  if G.E_MANAGER then
+    G.E_MANAGER:add_event(Event({ trigger = 'immediate', func = function()
+      open_dup_browser()
+      return true
+    end }))
+  else
+    open_dup_browser()
+  end
+end
+
+G.FUNCS.sbx_open_tags = function() open_tag_browser() end
+G.FUNCS.sbx_tag_back = function() open_tag_browser() end
+G.FUNCS.sbx_tag_prev = function()
+  SBX.tag_page = math.max(1, (tonumber(SBX.tag_page) or 1) - 1)
+  open_tag_browser()
+end
+G.FUNCS.sbx_tag_next = function()
+  SBX.tag_page = (tonumber(SBX.tag_page) or 1) + 1
+  open_tag_browser()
+end
+G.FUNCS.sbx_open_dup = function() open_dup_browser() end
+G.FUNCS.sbx_dup_commit = function() duplicate_selected_cards() end
+G.FUNCS.sbx_dup_clear = function() clear_dup_selection() end
+G.FUNCS.sbx_dup_mode_jokers = function()
+  if SBX.dup_mode == 'jokers' then return end
+  SBX.dup_mode = 'jokers'
+  open_dup_browser()
+end
+G.FUNCS.sbx_dup_mode_consumables = function()
+  if SBX.dup_mode == 'consumables' then return end
+  SBX.dup_mode = 'consumables'
+  open_dup_browser()
 end
