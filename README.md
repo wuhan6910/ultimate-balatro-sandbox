@@ -2,7 +2,7 @@
 
 A native-style creative toolbox for **Balatro**. Ultimate Sandbox adds any Joker,
 consumable, Voucher, or custom playing card directly to a live run, lets you delete any
-number of cards from the deck, and provides an in-game editor for run values.
+number of cards from the deck or Jokers from play, and provides an in-game editor for run values.
 
 Everything uses Balatro's own UI, card art, sounds, and animations, so the tools feel like
 part of the game.
@@ -15,10 +15,12 @@ part of the game.
 - Four compact buttons appear on the right side of a run: `Cards`, `Stats`, `Deck`, and
   `Browse`.
 - Browse and spawn every Joker, Tarot, Planet, Spectral card, and Voucher in the game.
-- Choose an edition and sticker for Jokers and consumables.
+- Choose any base-game edition for Jokers and stickers for Jokers only. Tarot, Planet,
+  and Spectral cards support only None/Negative editions, matching the base game.
 - Create a playing card with any rank, suit, enhancement, edition, and seal, then add it
   to your hand or draw pile.
 - Show the entire deck on one screen, select multiple cards, and delete them at once.
+- Delete Jokers from play in the same editor, even when they carry an Eternal sticker.
 - Edit poker-hand levels, current and future hand/discard counts, hand-size limit, and
   money.
 
@@ -70,6 +72,9 @@ Select a poker hand and adjust its level. You can also edit:
 
 The whole run deck is displayed on one screen. Click cards to select or deselect them,
 then click `Delete Selected` to permanently remove all selected cards from every deck area.
+
+Use the `Jokers` tab in the same screen to remove Jokers from play. Deletion bypasses
+sell restrictions, so Eternal, Perishable, and Rental stickers cannot block it.
 
 ### Browse
 
