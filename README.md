@@ -12,16 +12,18 @@ part of the game.
 
 ## Features
 
-- Six compact buttons appear on the right side of a run: `Cards`, `Stats`, `Deck`,
-  `Browse`, `Tags`, and `Copy`.
-- Browse and spawn every Joker, Tarot, Planet, Spectral card, and Voucher in the game.
+- Four compact buttons appear on the right side of a run: `Cards`, `Stats`, `Browse`,
+  and `Copy`.
+- Browse and spawn every Joker, Tarot, Planet, Spectral card, Voucher, and Tag in the game.
 - Choose any base-game edition for Jokers and stickers for Jokers only. Tarot, Planet,
   and Spectral cards support only None/Negative editions, matching the base game.
 - Create a playing card with any rank, suit, enhancement, edition, and seal, then add it
   to your hand or draw pile.
-- Show the entire deck on one screen, select multiple cards, and delete them at once.
-- Delete Jokers from play in the same editor, even when they carry an Eternal sticker.
-- Add any tag from a native grid of tag sprites, with the game's hover description.
+- Batch-edit any number of deck cards with a chosen enhancement, edition, or seal.
+- Show the entire deck on one screen, select multiple cards, and delete them at once, or
+  delete Jokers from play even when they carry an Eternal sticker.
+- Add any tag from the `Tags` tab inside Browse; hover an icon for its effect and click
+  repeatedly to stack tags.
 - Duplicate any owned Joker or consumable, keeping edition, stickers and current values.
 - Edit poker-hand levels, current and future hand/discard counts, hand-size limit, and
   money.
@@ -37,7 +39,7 @@ part of the game.
 1. Install Lovely and Steamodded as described by their own documentation.
 2. Download the latest Ultimate Sandbox release.
 3. Extract the `ultimate-sandbox` folder into your Balatro `Mods` folder.
-4. Launch the game and start a run. The six Ultimate Sandbox buttons will appear on the
+4. Launch the game and start a run. The four Ultimate Sandbox buttons will appear on the
    right side of the screen.
 
 Typical Windows Mods folder:
@@ -58,8 +60,16 @@ Use either Ultimate Sandbox or the Chinese edition, not both at the same time.
 
 ### Cards
 
-Choose a rank, suit, enhancement, edition, and seal. Click `Add to Hand` or `Add to Deck`.
-Changes apply immediately.
+This screen has three tabs:
+
+- `Create Card`: choose a rank, suit, enhancement, edition, and seal. Click `Add to Hand`
+  or `Add to Deck`. Changes apply immediately.
+- `Batch Edit`: select any number of cards from the whole deck and apply one enhancement,
+  edition, or seal to all of them. Every picker has a `Keep` option.
+- `Delete`: shows the whole run deck on one screen. Click cards to select or deselect
+  them, then click `Delete Selected`. Switch to `Jokers` to remove Jokers from play;
+  deletion bypasses sell restrictions, so Eternal, Perishable, and Rental stickers do
+  not block it.
 
 ### Stats
 
@@ -71,23 +81,13 @@ once (each hand stops at level 1 when lowering). You can also edit:
 - Hand-size limit
 - Money
 
-### Deck
-
-The whole run deck is displayed on one screen. Click cards to select or deselect them,
-then click `Delete Selected` to permanently remove all selected cards from every deck area.
-
-Use the `Jokers` tab in the same screen to remove Jokers from play. Deletion bypasses
-sell restrictions, so Eternal, Perishable, and Rental stickers cannot block it.
-
 ### Browse
 
 Choose a card type, edition, and sticker, then click a card to add it to the run.
 Vouchers are redeemed permanently and owned Vouchers are dimmed.
-
-### Tags
-
-Every tag is shown as its native sprite. Hover one to read its effect, then click to add
-it to the run.
+The `Tags` tab in the same browser shows every tag as its native icon. Hover an icon to
+read its effect, then click to add it to the run; click again to stack it like a
+skipped-blind tag.
 
 ### Copy
 

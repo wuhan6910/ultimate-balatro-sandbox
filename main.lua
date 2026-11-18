@@ -1,12 +1,10 @@
 --- Sandbox — a creative-mode toolbox for Balatro.
---- Six native-styled buttons appear on the right during a run:
----   [Cards] adds one playing card with a chosen rank, suit, enhancement,
----          edition and seal, into the hand or the draw pile.
+--- Four native-styled buttons appear on the right during a run:
+---   [Cards] opens card tools: create one card, batch-edit the whole deck,
+---          or select and delete deck cards / Jokers.
 ---   [Stats] edits poker-hand levels, hands/discards, hand-size limit, and money.
----   [Deck]  opens the whole-deck editor for selecting and deleting cards.
 ---   [Browse] opens the full-screen browser: every Joker/Tarot/Planet/
----          Spectral/Voucher, paginated; CLICK a card to add it.
----   [Tags]  opens the tag grid; CLICK a tag to add it to the run.
+---          Spectral/Voucher/Tag, paginated; CLICK an entry to add it.
 ---   [Copy]  duplicates owned Jokers or consumables, keeping editions/stickers.
 ---
 --- Uses only the game's own UI primitives (UIBox, CardArea, option cycles,
@@ -30,22 +28,31 @@ local SBX = {
   delete_selected_count = 0,
   delete_scale = 0.4,
   delete_mode = 'deck',     -- 'deck' or 'jokers'
-  tag_page = 1,             -- tag browser page
   dup_areas = {},           -- duplicate grid CardAreas
   dup_cards = {},           -- card references shown in the duplicate grid
   dup_selected = {},        -- original card refs selected for duplication
   dup_selected_count = 0,
   dup_scale = 0.55,
   dup_mode = 'jokers',      -- 'jokers' or 'consumables'
+  play_mode = 'create',     -- 'create' or 'batch'
+  batch_enh = 1,            -- 1 = keep current enhancement
+  batch_edition = 1,        -- 1 = keep current edition
+  batch_seal = 1,           -- 1 = keep current seal
+  batch_areas = {},         -- batch-modify grid CardAreas
+  batch_cards = {},         -- card references shown in the batch grid
+  batch_selected = {},      -- original card refs selected for modification
+  batch_selected_count = 0,
+  batch_scale = 0.4,
 }
 
-SBX.SETS = { 'Joker', 'Tarot', 'Planet', 'Spectral', 'Voucher' }
+SBX.SETS = { 'Joker', 'Tarot', 'Planet', 'Spectral', 'Voucher', 'Tag' }
 SBX.SET_LABELS = {
   Joker = 'Jokers',
   Tarot = 'Tarot',
   Planet = 'Planet',
   Spectral = 'Spectral',
   Voucher = 'Vouchers',
+  Tag = 'Tags',
 }
 SBX.EDITIONS = {
   { label = 'None', key = nil },
@@ -73,12 +80,18 @@ local function sandbox_toast(text, colour)
   end)
 end
 
+local function inline_node(node)
+  return { n = G.UIT.C, config = { align = 'cm', padding = 0.01 }, nodes = { node } }
+end
+
 local open_delete_browser
 local toggle_delete_selection
 local open_stats_browser
-local open_tag_browser
 local open_dup_browser
 local toggle_dup_selection
+local batch_page_definition
+local fill_batch_areas
+local toggle_batch_selection
 
 local function card_log_name(card)
   local base = card and card.base
@@ -221,6 +234,10 @@ function Card:click()
   end
   if self.area and self.area.config and self.area.config.sandbox_dup then
     toggle_dup_selection(self)
+    return
+  end
+  if self.area and self.area.config and self.area.config.sandbox_batch then
+    toggle_batch_selection(self)
     return
   end
   if self.area and self.area.config and self.area.config.sandbox_grid then
@@ -391,7 +408,122 @@ local function fill_areas(areas, set, page, cols, scale)
   end
 end
 
+-- Tags are not cards, so the Tag tab renders a button grid instead of a CardArea.
+
+local function tag_name(proto, key)
+  local fallback = tostring((proto and proto.name) or key)
+  if type(localize) == 'function' then
+    local ok, name = pcall(localize, {
+      type = 'name_text', set = 'Tag', key = (proto and proto.key) or key,
+    })
+    if ok and type(name) == 'string' and name ~= '' and name ~= 'ERROR' then
+      return name
+    end
+  end
+  return fallback
+end
+
+local function tag_entries()
+  local list = {}
+  if not (G and G.P_TAGS) then return list end
+  for key, proto in pairs(G.P_TAGS) do
+    if type(proto) == 'table' and proto.name then
+      list[#list + 1] = { key = key, proto = proto, name = tag_name(proto, key) }
+    end
+  end
+  table.sort(list, function(a, b)
+    local ao, bo = tonumber(a.proto.order) or 999, tonumber(b.proto.order) or 999
+    if ao ~= bo then return ao < bo end
+    return tostring(a.key) < tostring(b.key)
+  end)
+  return list
+end
+
+local function add_run_tag(key)
+  if not (G and G.GAME and G.GAME.tags) then
+    log('tag guard: not in run')
+    return false, 'No active run'
+  end
+  if (type(Tag) ~= 'table' and type(Tag) ~= 'function') or type(add_tag) ~= 'function' then
+    log('tag guard: unsupported')
+    return false, 'Tags are not supported by this game version'
+  end
+  local ok, err = pcall(function() add_tag(Tag(key)) end)
+  if ok then
+    log('added tag ' .. tostring(key))
+    pcall(play_sound, 'holo1', 1.1, 0.5)
+  else
+    log('tag error for ' .. tostring(key) .. ': ' .. tostring(err))
+    pcall(play_sound, 'cancel')
+  end
+  return ok, err
+end
+
+local function tag_tooltip(temp, entry)
+  local vars = {}
+  if type(temp.get_uibox_table) == 'function' then
+    local ok, got = pcall(temp.get_uibox_table, temp, nil, true)
+    if ok and type(got) == 'table' then vars = got end
+  end
+  local lines
+  if type(localize) == 'function' then
+    local ok, got = pcall(localize, { type = 'raw_descriptions', set = 'Tag',
+      key = (entry.proto and entry.proto.key) or entry.key, vars = vars })
+    if ok and type(got) == 'table' and #got > 0 then lines = got end
+  end
+  return { title = entry.name, text = lines or { 'Click the icon to add this tag to the run.' } }
+end
+
+local function calm_tag_obj(obj, depth)
+  depth = depth or 0
+  if depth > 8 or type(obj) ~= 'table' then return end
+  if obj.states then
+    for _, state in ipairs({ 'collide', 'hover', 'click', 'focus', 'drag' }) do
+      if obj.states[state] then obj.states[state].can = false end
+    end
+  end
+  if obj.config and type(obj.config.object) == 'table' then calm_tag_obj(obj.config.object, depth + 1) end
+  if obj.nodes then
+    for _, node in ipairs(obj.nodes) do calm_tag_obj(node, depth + 1) end
+  end
+end
+
+local function tag_cell(entry)
+  local cb = 'usbx_browser_tag_' .. entry.key
+  G.FUNCS[cb] = function()
+    log('tag click ' .. tostring(entry.key))
+    local added = add_run_tag(entry.key)
+    if added then sandbox_toast(entry.name, G.C.ORANGE) end
+  end
+  local tooltip
+  local ok, cell = pcall(function()
+    local temp = Tag(entry.key, true)
+    local tab, sprite = temp:generate_UI(0.72)
+    tab.nodes[1].config.can_collide = false
+    calm_tag_obj(tab)
+    calm_tag_obj(sprite)
+    tooltip = tag_tooltip(temp, entry)
+    return { n = G.UIT.C, config = { align = 'cm', padding = 0.08, button = cb,
+      colour = G.C.CLEAR, minw = 0.9, minh = 0.9, tooltip = tooltip }, nodes = { tab } }
+  end)
+  if ok then
+    return cell
+  end
+  log('tag cell error for ' .. tostring(entry.key) .. ': ' .. tostring(cell))
+  return UIBox_button({ button = cb, label = { entry.name },
+    minw = 0.82, maxw = 0.82, minh = 0.82, scale = 0.2, col = true,
+    colour = G.C.ORANGE })
+end
+
+local function browser_page_size(set)
+  if set == 'Tag' then return 24 end
+  return BROWSER_ROWS * BROWSER_COLS
+end
+
 local function pages_for(set, per_page)
+  if set == 'Tag' then
+    return math.max(1, math.ceil(#tag_entries() / per_page))
+  end
   return math.max(1, math.ceil(#G.P_CENTER_POOLS[set] / per_page))
 end
 
@@ -399,20 +531,38 @@ end
 
 local function browser_definition()
   local set = SBX.set
-  local pages = pages_for(set, BROWSER_ROWS * BROWSER_COLS)
+  local per_page = browser_page_size(set)
+  local pages = pages_for(set, per_page)
   if SBX.page > pages then SBX.page = 1 end
+  if SBX.page < 1 then SBX.page = 1 end
 
   SBX.areas = {}
   local deck_tables = {}
-  for j = 1, BROWSER_ROWS do
-    SBX.areas[j] = CardArea(
-      G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
-      BROWSER_COLS * G.CARD_W, 0.95 * G.CARD_H,
-      { card_limit = BROWSER_COLS, type = 'title', highlight_limit = 0, collection = true, sandbox_grid = true })
-    table.insert(deck_tables,
-      { n = G.UIT.R, config = { align = 'cm', padding = 0.05, no_fill = true }, nodes = {
-        { n = G.UIT.O, config = { object = SBX.areas[j] } },
-      } })
+  if set == 'Tag' then
+    local entries = tag_entries()
+    local first = (SBX.page - 1) * per_page
+    for r = 1, 4 do
+      local nodes = {}
+      for c = 1, 6 do
+        local entry = entries[first + (r - 1) * 6 + c]
+        if entry then nodes[#nodes + 1] = tag_cell(entry) end
+      end
+      if #nodes > 0 then
+        table.insert(deck_tables,
+          { n = G.UIT.R, config = { align = 'cm', padding = 0.05, no_fill = true }, nodes = nodes })
+      end
+    end
+  else
+    for j = 1, BROWSER_ROWS do
+      SBX.areas[j] = CardArea(
+        G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+        BROWSER_COLS * G.CARD_W, 0.95 * G.CARD_H,
+        { card_limit = BROWSER_COLS, type = 'title', highlight_limit = 0, collection = true, sandbox_grid = true })
+      table.insert(deck_tables,
+        { n = G.UIT.R, config = { align = 'cm', padding = 0.05, no_fill = true }, nodes = {
+          { n = G.UIT.O, config = { object = SBX.areas[j] } },
+        } })
+    end
   end
 
   local tab_buttons = {}
@@ -431,34 +581,36 @@ local function browser_definition()
     for i, e in ipairs(SBX.EDITIONS) do edition_options[i] = e.label end
     for i, st in ipairs(SBX.STICKERS) do sticker_options[i] = st.label end
     edition_index = SBX.edition
-  elseif set ~= 'Voucher' then
+  elseif set ~= 'Voucher' and set ~= 'Tag' then
     edition_options[1] = SBX.EDITIONS[1].label
     edition_options[2] = SBX.EDITIONS[NEGATIVE_EDITION_INDEX].label
     edition_index = SBX.edition == NEGATIVE_EDITION_INDEX and 2 or 1
   end
 
   local contents = {
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = tab_buttons },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 7.4 }, nodes = tab_buttons },
   }
 
-  if set ~= 'Voucher' then
+  if set ~= 'Voucher' and set ~= 'Tag' then
     local picker_nodes = {
-      create_option_cycle({ options = edition_options, w = 2.2, opt_callback = 'sbx_edition',
-        current_option = edition_index, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.58 }),
+      inline_node(create_option_cycle({ options = edition_options, w = 2.2, opt_callback = 'sbx_edition',
+        current_option = edition_index, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.58 })),
     }
     if set == 'Joker' then
-      picker_nodes[#picker_nodes + 1] = create_option_cycle({ options = sticker_options, w = 2.2,
+      picker_nodes[#picker_nodes + 1] = inline_node(create_option_cycle({ options = sticker_options, w = 2.2,
         opt_callback = 'sbx_sticker', current_option = SBX.sticker,
-        colour = G.C.ETERNAL or G.C.RED, no_pips = true, scale = 0.58 })
+        colour = G.C.ETERNAL or G.C.RED, no_pips = true, scale = 0.58 }))
     end
-    table.insert(contents, { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = picker_nodes })
+    table.insert(contents, { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 4.8 }, nodes = picker_nodes })
   end
 
-  table.insert(contents, { n = G.UIT.R, config = { align = 'cm', r = 0.1, colour = G.C.BLACK, emboss = 0.05 }, nodes = deck_tables })
+  table.insert(contents, { n = G.UIT.R, config = { align = 'cm', r = 0.1, colour = G.C.BLACK,
+    emboss = 0.05, padding = set == 'Tag' and 0.08 or 0 }, nodes = deck_tables })
   table.insert(contents, { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
       { n = G.UIT.T, config = { text = set == 'Voucher'
           and 'Click a Voucher to redeem it permanently. Owned Vouchers are dimmed.'
-          or 'Click a card to add it to the current run',
+          or (set == 'Tag' and 'Click a tag icon to add it; hover to read its effect. Click again to stack.'
+            or 'Click a card to add it to the current run'),
         scale = 0.3, colour = G.C.UI.TEXT_LIGHT } },
     } })
   table.insert(contents, { n = G.UIT.R, config = { align = 'cm' }, nodes = {
@@ -474,7 +626,9 @@ local function open_browser()
   local ok, err = pcall(function()
     G.SETTINGS.paused = true
     G.FUNCS.overlay_menu({ definition = browser_definition() })
-    fill_areas(SBX.areas, SBX.set, SBX.page, BROWSER_COLS)
+    if SBX.set ~= 'Tag' then
+      fill_areas(SBX.areas, SBX.set, SBX.page, BROWSER_COLS)
+    end
   end)
   if not ok then log('browser error: ' .. tostring(err)) end
 end
@@ -526,16 +680,8 @@ local function buttons_definition()
         minh = 0.6, scale = 0.25, colour = G.C.GREEN }),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
-      UIBox_button({ button = 'sbx_open_delete', label = { 'Deck' }, minw = 0.92, maxw = 0.92,
-        minh = 0.6, scale = 0.25, colour = G.C.RED }),
-    } },
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       UIBox_button({ button = 'sbx_open_browser', label = { 'Browse' }, minw = 0.92, maxw = 0.92,
         minh = 0.6, scale = 0.25, colour = G.C.BOOSTER }),
-    } },
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
-      UIBox_button({ button = 'sbx_open_tags', label = { 'Tags' }, minw = 0.92, maxw = 0.92,
-        minh = 0.6, scale = 0.25, colour = G.C.ORANGE }),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       UIBox_button({ button = 'sbx_open_dup', label = { 'Copy' }, minw = 0.92, maxw = 0.92,
@@ -1177,7 +1323,24 @@ local function spawn_playing_card(dest)
   end
 end
 
+local function play_mode_tabs()
+  local function mode_button(mode, label, minw, maxw)
+    return UIBox_button({
+      button = 'sbx_play_mode_' .. mode, label = { label },
+      minw = minw, maxw = maxw, minh = 0.46, scale = 0.31, col = true,
+      colour = (SBX.play_mode == mode) and G.C.RED or G.C.BLUE,
+    })
+  end
+  return { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 5.9 }, nodes = {
+    mode_button('create', 'Create Card', 1.5, 1.8),
+    mode_button('batch', 'Batch Edit', 1.4, 1.7),
+    mode_button('delete', 'Delete', 1.2, 1.4),
+  } }
+end
+
 local function playing_definition()
+  if SBX.play_mode == 'batch' then return batch_page_definition() end
+
   SBX.playing_area = CardArea(0, 0, G.CARD_W, G.CARD_H,
     { card_limit = 1, type = 'title', highlight_limit = 0, collection = true })
 
@@ -1188,28 +1351,29 @@ local function playing_definition()
   end
 
   local contents = {
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
-      create_option_cycle({ options = labels(PC_RANKS), w = 1.2, opt_callback = 'sbx_play_rank',
-        current_option = SBX.playing.rank, colour = G.C.RED, no_pips = true, scale = 0.5 }),
-      create_option_cycle({ options = labels(PC_SUITS), w = 2.0, opt_callback = 'sbx_play_suit',
-        current_option = SBX.playing.suit, colour = G.C.RED, no_pips = true, scale = 0.45 }),
+    play_mode_tabs(),
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 3.6 }, nodes = {
+      inline_node(create_option_cycle({ options = labels(PC_RANKS), w = 1.2, opt_callback = 'sbx_play_rank',
+        current_option = SBX.playing.rank, colour = G.C.RED, no_pips = true, scale = 0.5 })),
+      inline_node(create_option_cycle({ options = labels(PC_SUITS), w = 2.0, opt_callback = 'sbx_play_suit',
+        current_option = SBX.playing.suit, colour = G.C.RED, no_pips = true, scale = 0.45 })),
     } },
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
-      create_option_cycle({ options = labels(PC_ENHANCEMENTS), w = 2.3, opt_callback = 'sbx_play_enh',
-        current_option = SBX.playing.enh, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.45 }),
-      create_option_cycle({ options = labels(PC_EDITIONS), w = 1.9, opt_callback = 'sbx_play_edition',
-        current_option = SBX.playing.edition, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.42 }),
-      create_option_cycle({ options = labels(PC_SEALS), w = 1.8, opt_callback = 'sbx_play_seal',
-        current_option = SBX.playing.seal, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.42 }),
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 6.3 }, nodes = {
+      inline_node(create_option_cycle({ options = labels(PC_ENHANCEMENTS), w = 2.3, opt_callback = 'sbx_play_enh',
+        current_option = SBX.playing.enh, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.45 })),
+      inline_node(create_option_cycle({ options = labels(PC_EDITIONS), w = 1.9, opt_callback = 'sbx_play_edition',
+        current_option = SBX.playing.edition, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.42 })),
+      inline_node(create_option_cycle({ options = labels(PC_SEALS), w = 1.8, opt_callback = 'sbx_play_seal',
+        current_option = SBX.playing.seal, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.42 })),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       { n = G.UIT.O, config = { object = SBX.playing_area } },
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       UIBox_button({ button = 'sbx_play_hand', label = { 'Add to Hand' },
-        minw = 1.8, maxw = 2.2, minh = 0.5, scale = 0.32, colour = G.C.BLUE }),
+        minw = 1.8, maxw = 2.2, minh = 0.5, scale = 0.32, col = true, colour = G.C.BLUE }),
       UIBox_button({ button = 'sbx_play_deck', label = { 'Add to Deck' },
-        minw = 1.8, maxw = 2.2, minh = 0.5, scale = 0.32, colour = G.C.GREEN }),
+        minw = 1.8, maxw = 2.2, minh = 0.5, scale = 0.32, col = true, colour = G.C.GREEN }),
     } },
     { n = G.UIT.R, config = { align = 'cm' }, nodes = {
       { n = G.UIT.T, config = { text = 'Rank / suit / enhancement / edition / seal. Changes apply immediately.',
@@ -1221,15 +1385,38 @@ local function playing_definition()
 end
 
 local function open_playing()
+  if SBX.play_mode == 'delete' then
+    open_delete_browser()
+    return
+  end
   local ok, err = pcall(function()
     G.SETTINGS.paused = true
     G.FUNCS.overlay_menu({ definition = playing_definition() })
-    refresh_playing_preview()
+    if SBX.play_mode == 'batch' then
+      fill_batch_areas()
+    else
+      refresh_playing_preview()
+    end
   end)
   if not ok then log('playing overlay error: ' .. tostring(err)) end
 end
 
 G.FUNCS.sbx_open_playing = function() open_playing() end
+G.FUNCS.sbx_play_mode_create = function()
+  if SBX.play_mode == 'create' then return end
+  SBX.play_mode = 'create'
+  open_playing()
+end
+G.FUNCS.sbx_play_mode_batch = function()
+  if SBX.play_mode == 'batch' then return end
+  SBX.play_mode = 'batch'
+  open_playing()
+end
+G.FUNCS.sbx_play_mode_delete = function()
+  if SBX.play_mode == 'delete' then return end
+  SBX.play_mode = 'delete'
+  open_delete_browser()
+end
 G.FUNCS.sbx_play_hand = function() spawn_playing_card('hand') end
 G.FUNCS.sbx_play_deck = function() spawn_playing_card('deck') end
 
@@ -1364,7 +1551,7 @@ local function delete_definition()
   SBX.delete_cards = cards
 
   local rows = math.max(1, math.ceil(#cards / DELETE_COLS))
-  local scale = math.min(DELETE_BASE_SCALE, 1.65 / rows)
+  local scale = math.min(0.37, 1.4 / rows)
   if scale < 0.22 then scale = 0.22 end
   SBX.delete_scale = scale
 
@@ -1399,27 +1586,25 @@ local function delete_definition()
   end
 
   local contents = {
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+    play_mode_tabs(),
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 5.4 }, nodes = {
       UIBox_button({ button = 'sbx_delete_mode_deck', label = { 'Deck' },
-        minw = 1.1, maxw = 1.3, minh = 0.48, scale = 0.33,
+        minw = 1.1, maxw = 1.3, minh = 0.48, scale = 0.33, col = true,
         colour = (not jokers) and G.C.RED or G.C.BLUE }),
       UIBox_button({ button = 'sbx_delete_mode_jokers', label = { 'Jokers' },
-        minw = 1.3, maxw = 1.5, minh = 0.48, scale = 0.33,
+        minw = 1.3, maxw = 1.5, minh = 0.48, scale = 0.33, col = true,
         colour = jokers and G.C.RED or G.C.BLUE }),
+      { n = G.UIT.T, config = { text = #cards .. (jokers and ' Jokers' or ' cards'),
+        scale = 0.3, colour = G.C.UI.TEXT_LIGHT } },
     } },
-    { n = G.UIT.R, config = { align = 'cm' }, nodes = {
-      { n = G.UIT.T, config = { text = (jokers
-          and ('' .. #cards .. ' Jokers in play. Click a Joker to toggle selection.')
-          or ('This deck contains ' .. #cards .. ' cards. Click a card to toggle selection.')),
-        scale = 0.29, colour = G.C.UI.TEXT_LIGHT } },
-    } },
+    { n = G.UIT.R, config = { align = 'cm', minh = 0.35, no_fill = true }, nodes = {} },
     empty_note or { n = G.UIT.R, config = { align = 'cm', r = 0.1, colour = G.C.BLACK, emboss = 0.05 }, nodes = deck_tables },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       { n = G.UIT.O, config = { object = selection_count } },
       UIBox_button({ button = 'sbx_delete_commit', label = { 'Delete Selected' },
-        minw = 2.1, maxw = 2.4, minh = 0.5, scale = 0.31, colour = G.C.RED }),
+        minw = 2.1, maxw = 2.4, minh = 0.5, scale = 0.31, col = true, colour = G.C.RED }),
       UIBox_button({ button = 'sbx_delete_clear', label = { 'Clear Selection' },
-        minw = 2.0, maxw = 2.3, minh = 0.5, scale = 0.29, colour = G.C.BLUE }),
+        minw = 2.0, maxw = 2.3, minh = 0.5, scale = 0.29, col = true, colour = G.C.BLUE }),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
       { n = G.UIT.T, config = { text = (jokers
@@ -1433,6 +1618,7 @@ local function delete_definition()
 end
 
 open_delete_browser = function()
+  SBX.play_mode = 'delete'
   clear_delete_selection()
   local ok, err = pcall(function()
     G.SETTINGS.paused = true
@@ -1503,119 +1689,231 @@ G.FUNCS.sbx_delete_mode_jokers = function()
   open_delete_browser()
 end
 
--- ---------------------------------------------------------------- tags
--- Native tag sprites in a grid. Hover shows the game's own tag tooltip;
--- clicking adds that tag to the run.
+-- ---------------------------------------------------------------- batch modify
+-- Select any number of playing cards (whole deck or current hand) and apply an
+-- enhancement / edition / seal to all of them at once.  Every picker keeps a
+-- "Keep" entry, so a batch can touch only one of the three properties.
 
-local TAG_COLS, TAG_ROWS = 8, 3
+local BATCH_COLS = 13
+local BATCH_BASE_SCALE = 0.4
 
-local function tag_list()
-  local list = {}
-  if not (G and G.P_TAGS) then return list end
-  for key, proto in pairs(G.P_TAGS) do
-    if type(proto) == 'table' and proto.name then
-      list[#list + 1] = { key = key, proto = proto }
-    end
-  end
-  table.sort(list, function(a, b)
-    local ao, bo = tonumber(a.proto.order) or 999, tonumber(b.proto.order) or 999
-    if ao ~= bo then return ao < bo end
-    return tostring(a.key) < tostring(b.key)
-  end)
-  return list
+local function batch_option_list(list)
+  local out = { { label = 'Keep' } }
+  for _, v in ipairs(list) do out[#out + 1] = v end
+  return out
 end
 
-local function add_run_tag(key)
-  if not (G and G.GAME and G.GAME.tags) then return false, 'not in a run' end
-  if type(Tag) ~= 'function' or type(add_tag) ~= 'function' then
-    return false, 'tags are not supported by this game version'
+local BATCH_ENHANCEMENTS = batch_option_list(PC_ENHANCEMENTS)
+local BATCH_EDITIONS = batch_option_list(PC_EDITIONS)
+local BATCH_SEALS = batch_option_list(PC_SEALS)
+
+local function batch_card_list()
+  return deck_card_list()
+end
+
+fill_batch_areas = function()
+  local areas = SBX.batch_areas or {}
+  local cards = SBX.batch_cards or {}
+  local scale = SBX.batch_scale or BATCH_BASE_SCALE
+  for j = 1, #areas do clear_area(areas[j]) end
+  for j = 1, #areas do
+    for i = 1, BATCH_COLS do
+      local original = cards[i + (j - 1) * BATCH_COLS]
+      if original then
+        local ok, err = pcall(function()
+          local display = copy_card(original, nil, scale)
+          display.T.x = areas[j].T.x + areas[j].T.w / 2
+          display.T.y = areas[j].T.y
+          display:hard_set_T()
+          display.states.drag.can = false
+          display.sandbox_batch_target = original
+          areas[j]:emplace(display)
+        end)
+        if not ok then log('batch preview error: ' .. tostring(err)) end
+      end
+    end
   end
-  local ok, err = pcall(function() add_tag(Tag(key)) end)
-  if ok then
-    log('added tag ' .. tostring(key))
-    pcall(play_sound, 'holo1', 1.1, 0.5)
+end
+
+toggle_batch_selection = function(display)
+  local target = display and display.sandbox_batch_target
+  if not target then return end
+  local area = display.area
+
+  if SBX.batch_selected[target] then
+    SBX.batch_selected[target] = nil
+    SBX.batch_selected_count = math.max(0, SBX.batch_selected_count - 1)
+    if area then pcall(function() area:remove_from_highlighted(display, true) end) end
   else
-    log('tag error for ' .. tostring(key) .. ': ' .. tostring(err))
-    pcall(play_sound, 'cancel')
+    SBX.batch_selected[target] = true
+    SBX.batch_selected_count = SBX.batch_selected_count + 1
+    if area then pcall(function() area:add_to_highlighted(display) end) end
   end
-  return ok, err
+  pcall(play_sound, 'cardSlide1')
 end
 
-local function tag_cell(tag)
-  local ok, cell = pcall(function()
-    local temp = Tag(tag.key, true)
-    local tab, sprite = temp:generate_UI(0.8)
-    sprite.click = function(self)
-      add_run_tag(tag.key)
-      pcall(function() self:juice_up(0.2, 0.2) end)
-    end
-    return tab
-  end)
-  if not ok then
-    return { n = G.UIT.C, config = { align = 'cm', padding = 0.08 }, nodes = {
-      { n = G.UIT.T, config = { text = tostring(tag.proto.name), scale = 0.24,
-        colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+local function clear_batch_selection()
+  for _, area in ipairs(SBX.batch_areas or {}) do
+    pcall(function() area:unhighlight_all() end)
+  end
+  SBX.batch_selected = {}
+  SBX.batch_selected_count = 0
+end
+
+batch_page_definition = function()
+  local cards = batch_card_list()
+  SBX.batch_cards = cards
+
+  local rows = math.max(1, math.ceil(#cards / BATCH_COLS))
+  local scale = math.min(BATCH_BASE_SCALE, 1.45 / rows)
+  if scale < 0.22 then scale = 0.22 end
+  SBX.batch_scale = scale
+
+  SBX.batch_areas = {}
+  local deck_tables = {}
+  for j = 1, rows do
+    SBX.batch_areas[j] = CardArea(
+      G.ROOM.T.x + 0.2 * G.ROOM.T.w / 2, G.ROOM.T.h,
+      BATCH_COLS * G.CARD_W * scale, G.CARD_H * scale,
+      { card_limit = BATCH_COLS, type = 'title', highlight_limit = 999,
+        collection = true, sandbox_batch = true })
+    table.insert(deck_tables,
+      { n = G.UIT.R, config = { align = 'cm', padding = 0.02, no_fill = true }, nodes = {
+        { n = G.UIT.O, config = { object = SBX.batch_areas[j] } },
+      } })
+  end
+
+  local selection_count = DynaText({
+    string = {{ prefix = 'Selected ', ref_table = SBX, ref_value = 'batch_selected_count', suffix = ' cards' }},
+    colours = { G.C.WHITE }, shadow = true, scale = 0.45, pop_in = 0, silent = true,
+  })
+
+  local empty_note = nil
+  if #cards == 0 then
+    empty_note = { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      { n = G.UIT.T, config = { text = 'No cards in the deck',
+        scale = 0.32, colour = G.C.UI.TEXT_LIGHT } },
     } }
   end
-  return { n = G.UIT.C, config = { align = 'cm', padding = 0.08 }, nodes = { cell } }
-end
 
-local function tag_definition()
-  local list = tag_list()
-  local per_page = TAG_COLS * TAG_ROWS
-  local pages = math.max(1, math.ceil(#list / per_page))
-  SBX.tag_page = math.min(math.max(1, tonumber(SBX.tag_page) or 1), pages)
-  local first = (SBX.tag_page - 1) * per_page
-
-  local rows = {}
-  for r = 1, TAG_ROWS do
-    local nodes = {}
-    for c = 1, TAG_COLS do
-      local tag = list[first + (r - 1) * TAG_COLS + c]
-      if tag then nodes[#nodes + 1] = tag_cell(tag) end
-    end
-    if #nodes > 0 then
-      rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.04 }, nodes = nodes }
-    end
+  local function labels(list)
+    local out = {}
+    for i, v in ipairs(list) do out[i] = v.label end
+    return out
   end
 
-  local pager = {}
-  if pages > 1 then
-    pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_prev', label = { 'Prev' },
-      minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BLUE })
-  end
-  pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_back', label = { 'Back' },
-    minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BOOSTER })
-  if pages > 1 then
-    pager[#pager + 1] = UIBox_button({ button = 'sbx_tag_next', label = { 'Next' },
-      minw = 1.1, maxw = 1.3, minh = 0.5, scale = 0.3, colour = G.C.BLUE })
-  end
-
-  local pending = (G.GAME and G.GAME.tags and #G.GAME.tags) or 0
   local contents = {
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
-      { n = G.UIT.T, config = { text = 'Tags', scale = 0.46, colour = G.C.ORANGE, shadow = true } },
+    play_mode_tabs(),
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02, minw = 6.8 }, nodes = {
+      inline_node(create_option_cycle({ options = labels(BATCH_ENHANCEMENTS), w = 2.3, opt_callback = 'sbx_batch_enh',
+        current_option = SBX.batch_enh, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.55 })),
+      inline_node(create_option_cycle({ options = labels(BATCH_EDITIONS), w = 2.1, opt_callback = 'sbx_batch_edition',
+        current_option = SBX.batch_edition, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.55 })),
+      inline_node(create_option_cycle({ options = labels(BATCH_SEALS), w = 2.0, opt_callback = 'sbx_batch_seal',
+        current_option = SBX.batch_seal, colour = G.C.DARK_EDITION, no_pips = true, scale = 0.55 })),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
-      { n = G.UIT.T, config = { text = 'Click to add; hover for its effect. Pending tags: ' .. pending,
+      { n = G.UIT.T, config = { text = #cards .. ' cards in the deck; click to toggle selection',
+        scale = 0.3, colour = G.C.UI.TEXT_LIGHT } },
+    } },
+    { n = G.UIT.R, config = { align = 'cm', minh = 0.45, no_fill = true }, nodes = {} },
+    empty_note or { n = G.UIT.R, config = { align = 'cm', r = 0.1, colour = G.C.BLACK, emboss = 0.05 }, nodes = deck_tables },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.03, minw = 5.8 }, nodes = {
+      { n = G.UIT.O, config = { object = selection_count } },
+      UIBox_button({ button = 'sbx_batch_apply', label = { 'Apply to Selected' },
+        minw = 2.0, maxw = 2.4, minh = 0.5, scale = 0.33, col = true, colour = G.C.GREEN }),
+      UIBox_button({ button = 'sbx_batch_clear', label = { 'Clear' },
+        minw = 1.4, maxw = 1.8, minh = 0.5, scale = 0.32, col = true, colour = G.C.BLUE }),
+    } },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
+      { n = G.UIT.T, config = { text = 'Enhancement / edition / seal each have Keep; change only what you need.',
         scale = 0.28, colour = G.C.UI.TEXT_LIGHT } },
     } },
-    { n = G.UIT.R, config = { align = 'tm', r = 0.1, colour = G.C.BLACK, emboss = 0.05,
-      padding = 0.08, nodes = rows } },
-    { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = pager },
   }
 
   return create_UIBox_generic_options({ back_func = 'exit_overlay_menu', padding = 0.1, contents = contents })
 end
 
-open_tag_browser = function()
-  log('tag grid: ' .. #tag_list() .. ' tags')
-  local ok, err = pcall(function()
-    G.SETTINGS.paused = true
-    G.FUNCS.overlay_menu({ definition = tag_definition() })
-  end)
-  if not ok then log('tag overlay error: ' .. tostring(err)) end
+local function apply_batch_modify()
+  if G.STATES and G.STATE == G.STATES.HAND_PLAYED then
+    log('batch modify blocked: hand scoring')
+    pcall(play_sound, 'cancel')
+    return
+  end
+
+  local targets = {}
+  for _, card in ipairs(batch_card_list()) do
+    if SBX.batch_selected[card] then targets[#targets + 1] = card end
+  end
+  if #targets == 0 then
+    log('batch modify: nothing selected')
+    pcall(play_sound, 'cancel')
+    sandbox_toast('Select at least one card', G.C.RED)
+    return
+  end
+
+  local enh = SBX.batch_enh > 1 and BATCH_ENHANCEMENTS[SBX.batch_enh] or nil
+  local edition = SBX.batch_edition > 1 and BATCH_EDITIONS[SBX.batch_edition] or nil
+  local seal = SBX.batch_seal > 1 and BATCH_SEALS[SBX.batch_seal] or nil
+
+  local changed, failed, first_error = 0, 0, nil
+  for _, card in ipairs(targets) do
+    local ok, err = pcall(function()
+      if enh then
+        local center = enh.center and G.P_CENTERS[enh.center] or G.P_CENTERS.c_base
+        card:set_ability(center, true)
+      end
+      if edition then
+        if edition.key then
+          card:set_edition({ [edition.key] = true }, true)
+        else
+          card:set_edition(nil, true)
+        end
+      end
+      if seal then
+        card:set_seal(seal.name, true)
+      end
+    end)
+    if ok then
+      changed = changed + 1
+    else
+      failed = failed + 1
+      first_error = first_error or tostring(err)
+    end
+  end
+
+  local what = string.format('enh=%s edition=%s seal=%s',
+    enh and enh.label or 'keep', edition and edition.label or 'keep', seal and seal.label or 'keep')
+  if failed > 0 then
+    log('batch modified ' .. changed .. ' cards (' .. what .. '); ' .. failed .. ' failed: ' .. tostring(first_error))
+  else
+    log('batch modified ' .. changed .. ' cards (' .. what .. ')')
+  end
+  pcall(play_sound, changed > 0 and 'cardSlide2' or 'cancel')
+  if changed > 0 then sandbox_toast('Modified ' .. changed .. ' cards', G.C.GREEN) end
+  clear_batch_selection()
+
+  if G.E_MANAGER then
+    G.E_MANAGER:add_event(Event({ trigger = 'immediate', func = function()
+      open_playing()
+      return true
+    end }))
+  else
+    open_playing()
+  end
 end
+
+G.FUNCS.sbx_batch_enh = function(args)
+  if args and args.cycle_config then SBX.batch_enh = args.cycle_config.current_option end
+end
+G.FUNCS.sbx_batch_edition = function(args)
+  if args and args.cycle_config then SBX.batch_edition = args.cycle_config.current_option end
+end
+G.FUNCS.sbx_batch_seal = function(args)
+  if args and args.cycle_config then SBX.batch_seal = args.cycle_config.current_option end
+end
+G.FUNCS.sbx_batch_apply = function() apply_batch_modify() end
+G.FUNCS.sbx_batch_clear = function() clear_batch_selection() end
 
 -- ---------------------------------------------------------------- duplication
 -- Copy owned Jokers or consumables, keeping edition, stickers and current values.
@@ -1728,10 +2026,10 @@ local function dup_definition()
   local contents = {
     { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
       UIBox_button({ button = 'sbx_dup_mode_jokers', label = { 'Jokers' },
-        minw = 1.3, maxw = 1.5, minh = 0.48, scale = 0.33,
+        minw = 1.3, maxw = 1.5, minh = 0.48, scale = 0.33, col = true,
         colour = (not consumables) and G.C.RED or G.C.BLUE }),
       UIBox_button({ button = 'sbx_dup_mode_consumables', label = { 'Consumables' },
-        minw = 1.6, maxw = 1.8, minh = 0.48, scale = 0.33,
+        minw = 1.6, maxw = 1.8, minh = 0.48, scale = 0.33, col = true,
         colour = consumables and G.C.RED or G.C.BLUE }),
     } },
     { n = G.UIT.R, config = { align = 'cm' }, nodes = {
@@ -1742,9 +2040,9 @@ local function dup_definition()
     { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
       { n = G.UIT.O, config = { object = selection_count } },
       UIBox_button({ button = 'sbx_dup_commit', label = { 'Copy Selected' },
-        minw = 2.1, maxw = 2.4, minh = 0.5, scale = 0.31, colour = G.C.GREEN }),
+        minw = 2.1, maxw = 2.4, minh = 0.5, scale = 0.31, col = true, colour = G.C.GREEN }),
       UIBox_button({ button = 'sbx_dup_clear', label = { 'Clear Selection' },
-        minw = 2.0, maxw = 2.3, minh = 0.5, scale = 0.29, colour = G.C.BLUE }),
+        minw = 2.0, maxw = 2.3, minh = 0.5, scale = 0.29, col = true, colour = G.C.BLUE }),
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
       { n = G.UIT.T, config = { text = 'Copies keep edition, stickers and current values; slots expand automatically when needed.',
@@ -1829,16 +2127,6 @@ local function duplicate_selected_cards()
   end
 end
 
-G.FUNCS.sbx_open_tags = function() open_tag_browser() end
-G.FUNCS.sbx_tag_back = function() open_tag_browser() end
-G.FUNCS.sbx_tag_prev = function()
-  SBX.tag_page = math.max(1, (tonumber(SBX.tag_page) or 1) - 1)
-  open_tag_browser()
-end
-G.FUNCS.sbx_tag_next = function()
-  SBX.tag_page = (tonumber(SBX.tag_page) or 1) + 1
-  open_tag_browser()
-end
 G.FUNCS.sbx_open_dup = function() open_dup_browser() end
 G.FUNCS.sbx_dup_commit = function() duplicate_selected_cards() end
 G.FUNCS.sbx_dup_clear = function() clear_dup_selection() end
