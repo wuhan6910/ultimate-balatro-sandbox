@@ -656,6 +656,19 @@ local STATS_HANDS = {
   'Flush House', 'Flush Five',
 }
 
+local ALL_HANDS = '__all_hands__'
+
+-- Every poker hand in the run, including hands contributed by other mods.
+local function all_hand_keys()
+  local keys = {}
+  if not (G and G.GAME and G.GAME.hands) then return keys end
+  for key, hand in pairs(G.GAME.hands) do
+    if type(hand) == 'table' and tonumber(hand.level) then keys[#keys + 1] = key end
+  end
+  table.sort(keys)
+  return keys
+end
+
 local function stats_clamp(value, low, high)
   if value < low then return low end
   if value > high then return high end
@@ -715,22 +728,36 @@ local function stats_button_row(...)
 end
 
 local function stats_hand_options()
-  local options, current = {}, 1
+  local options, current = { 'All Hands' }, 1
+  if SBX.stats_hand == ALL_HANDS then current = 1 end
   for i, key in ipairs(STATS_HANDS) do
     local label = localize and localize(key, 'poker_hands')
-    options[i] = type(label) == 'string' and label or key
-    if key == SBX.stats_hand then current = i end
+    options[#options + 1] = type(label) == 'string' and label or key
+    if key == SBX.stats_hand then current = #options end
   end
   return options, current
 end
 
 local function stats_definition()
   local hands = (G.GAME and G.GAME.hands) or {}
+  local all_mode = SBX.stats_hand == ALL_HANDS
   local selected = hands[SBX.stats_hand] or hands['High Card'] or {}
   local current_round = (G.GAME and G.GAME.current_round) or {}
   local resets = (G.GAME and G.GAME.round_resets) or {}
   local options, option_index = stats_hand_options()
   local hand_limit = (G.hand and G.hand.config and G.hand.config.card_limit) or 0
+  local all_keys = all_mode and all_hand_keys() or {}
+  local level_value, detail_value = tostring(selected.level or 1), nil
+  if all_mode then
+    local low, high = nil, nil
+    for _, key in ipairs(all_keys) do
+      local lvl = tonumber(hands[key] and hands[key].level) or 1
+      low = low and math.min(low, lvl) or lvl
+      high = high and math.max(high, lvl) or lvl
+    end
+    level_value = (low and high and low ~= high) and (low .. '-' .. high) or tostring(low or 1)
+    detail_value = #all_keys .. ' hands total'
+  end
 
   local hand_panel = stats_panel('Hand Levels', 4.15, {
     { n = G.UIT.R, config = { align = 'cm', padding = 0.025 }, nodes = {
@@ -739,19 +766,26 @@ local function stats_definition()
     } },
     { n = G.UIT.R, config = { align = 'cm', padding = 0.02 }, nodes = {
       { n = G.UIT.T, config = { text = 'Level ', scale = 0.29, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-      { n = G.UIT.T, config = { text = tostring(selected.level or 1), scale = 0.38,
+      { n = G.UIT.T, config = { text = level_value, scale = 0.38,
         colour = G.C.ORANGE, shadow = true } },
-      { n = G.UIT.T, config = { text = '    Base ', scale = 0.25, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-      { n = G.UIT.T, config = { text = tostring(selected.chips or 0) .. ' x ' .. tostring(selected.mult or 0),
-        scale = 0.30, colour = G.C.WHITE, shadow = true } },
+      all_mode and { n = G.UIT.T, config = { text = '    ' .. (detail_value or ''),
+        scale = 0.25, colour = G.C.UI.TEXT_LIGHT, shadow = true } }
+        or { n = G.UIT.T, config = { text = '    Base ', scale = 0.25, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+      (not all_mode) and { n = G.UIT.T, config = {
+        text = tostring(selected.chips or 0) .. ' x ' .. tostring(selected.mult or 0),
+        scale = 0.30, colour = G.C.WHITE, shadow = true } } or nil,
     } },
     stats_button_row(
       stats_button('-10', 'sbx_level_m10', G.C.RED),
       stats_button('-1', 'sbx_level_m1', G.C.RED),
       stats_button('+1', 'sbx_level_p1', G.C.GREEN),
       stats_button('+10', 'sbx_level_p10', G.C.GREEN),
-      stats_button('Reset', 'sbx_level_reset', G.C.BLUE, 0.58)
+      stats_button(all_mode and 'Reset All' or 'Reset', 'sbx_level_reset', G.C.BLUE, all_mode and 0.98 or 0.58)
     ),
+    all_mode and { n = G.UIT.R, config = { align = 'cm', padding = 0.015 }, nodes = {
+      { n = G.UIT.T, config = { text = 'All hands change together; minimum 1.',
+        scale = 0.21, colour = G.C.UI.TEXT_LIGHT } },
+    } } or nil,
   })
 
   local counter_panel = stats_panel('Hands, Discards & Size', 5.2, {
@@ -844,6 +878,33 @@ end
 
 local function adjust_hand_level(delta)
   if not (G and G.GAME and G.GAME.hands) then return end
+
+  if SBX.stats_hand == ALL_HANDS then
+    local changed, first_error = 0, nil
+    for _, key in ipairs(all_hand_keys()) do
+      local hand = G.GAME.hands[key]
+      local old = tonumber(hand.level) or 1
+      local target = stats_clamp(old + delta, 1, 9999)
+      if target ~= old then
+        local ok, err = pcall(level_up_hand, nil, key, true, target - old)
+        if ok then
+          changed = changed + 1
+        else
+          first_error = first_error or err
+        end
+      end
+    end
+    if changed > 0 then
+      log('all hand levels ' .. (delta > 0 and '+' or '') .. delta .. ' on ' .. changed .. ' hands')
+      pcall(play_sound, 'tarot1')
+    else
+      pcall(play_sound, 'cancel')
+    end
+    if first_error then log('all hand level error: ' .. tostring(first_error)) end
+    open_stats_browser()
+    return
+  end
+
   local key = SBX.stats_hand
   local hand = G.GAME.hands[key]
   if not hand then return end
@@ -938,7 +999,8 @@ end
 G.FUNCS.sbx_open_stats = function() open_stats_browser() end
 G.FUNCS.sbx_stats_hand = function(args)
   if not args or not args.cycle_config then return end
-  SBX.stats_hand = STATS_HANDS[args.cycle_config.current_option] or STATS_HANDS[1]
+  local option = args.cycle_config.current_option
+  SBX.stats_hand = option == 1 and ALL_HANDS or (STATS_HANDS[option - 1] or STATS_HANDS[1])
   open_stats_browser()
 end
 G.FUNCS.sbx_level_m10 = function() adjust_hand_level(-10) end
@@ -946,6 +1008,21 @@ G.FUNCS.sbx_level_m1 = function() adjust_hand_level(-1) end
 G.FUNCS.sbx_level_p1 = function() adjust_hand_level(1) end
 G.FUNCS.sbx_level_p10 = function() adjust_hand_level(10) end
 G.FUNCS.sbx_level_reset = function()
+  if SBX.stats_hand == ALL_HANDS then
+    local changed = 0
+    for _, key in ipairs(all_hand_keys()) do
+      local hand = G.GAME.hands[key]
+      local old = tonumber(hand.level) or 1
+      if old ~= 1 then
+        local ok = pcall(level_up_hand, nil, key, true, 1 - old)
+        if ok then changed = changed + 1 end
+      end
+    end
+    log('all hand levels reset to 1 (' .. changed .. ' changed)')
+    pcall(play_sound, changed > 0 and 'tarot1' or 'cancel')
+    open_stats_browser()
+    return
+  end
   local hand = G.GAME and G.GAME.hands and G.GAME.hands[SBX.stats_hand]
   if hand then adjust_hand_level(1 - (tonumber(hand.level) or 1)) end
 end

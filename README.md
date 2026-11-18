@@ -61,7 +61,8 @@ Changes apply immediately.
 
 ### Stats
 
-Select a poker hand and adjust its level. You can also edit:
+Select a poker hand and adjust its level, or choose `All Hands` to change every hand at
+once (each hand stops at level 1 when lowering). You can also edit:
 
 - Hands and discards available in the current blind
 - Base hands and discards for later blinds
